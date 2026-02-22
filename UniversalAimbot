@@ -1,5 +1,5 @@
 -- ╔══════════════════════════════════════════════════════════════════════════╗
--- ║  PHANTOM  ·  v11.0                                                      ║
+-- ║  PHANTOM  ·  v12.0                                                      ║
 -- ║  Password gate  ·  Loading screen  ·  Wider reworked UI                ║
 -- ╚══════════════════════════════════════════════════════════════════════════╝
 
@@ -14,7 +14,7 @@ local Camera = workspace.CurrentCamera
 -- ─────────────────────────────────────────────────────────────────────────────
 -- PASSWORD
 -- ─────────────────────────────────────────────────────────────────────────────
-local CORRECT_PASSWORD = "Fishkiler@1"
+local CORRECT_PASSWORD = "1234"
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- ESP COLOR + SETTINGS
@@ -36,16 +36,22 @@ local applyESPColor -- forward decl
 -- ─────────────────────────────────────────────────────────────────────────────
 -- FLAGS & STATE
 -- ─────────────────────────────────────────────────────────────────────────────
-local Enabled = {Highlight=false,Skeleton=false,Tracer=false,Box=false,Name=false,Head=false}
+local Enabled = {Highlight=false,Skeleton=false,Tracer=false,Box=false,Name=false,Head=false,TeamCheck=false}
 
 local Aimbot = {
     Enabled=false, FOV=150, Smoothness=0.20, Target=nil,
-    HoldKey=Enum.KeyCode.E, ShowFOV=false, TargetPart="Head", VisCheck=true,
+    HoldKey=Enum.KeyCode.E, ShowFOV=false, TargetPart="Head", VisCheck=true, TeamCheck=false,
 }
 
 local Misc = {
     MenuKey=Enum.KeyCode.RightShift,
     InfiniteJump=false, Noclip=false, NoclipConn=nil, InfJumpConn=nil,
+    JumpPower=50, WalkSpeed=16,
+}
+
+local Rage = {
+    Spinbot=false, SpinSpeed=20, SpinConn=nil,
+    HitboxExpand=false, HitboxSize=5, HitboxParts={},
 }
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -222,6 +228,7 @@ local function getClosestInFOV()
     local best,bestDist=nil,Aimbot.FOV
     for _,p in ipairs(Players:GetPlayers()) do
         if p==LP then continue end
+        if Aimbot.TeamCheck and p.Team==LP.Team then continue end
         local char=p.Character; if not char then continue end
         local part=char:FindFirstChild(Aimbot.TargetPart) or char:FindFirstChild("Head"); if not part then continue end
         local sp,vis=w2s(part.Position); if not vis then continue end
@@ -253,7 +260,9 @@ local function doAimbotStep()
     if Aimbot.VisCheck and not isVisible(part) then Aimbot.Target=nil; return end
     local _,vis=w2s(part.Position); if not vis then Aimbot.Target=nil; return end
     local lookDir=(part.Position-Camera.CFrame.Position).Unit
-    local blended=Camera.CFrame.LookVector:Lerp(lookDir,Aimbot.Smoothness)
+    -- Invert smoothness: low value = fast/snappy, high value = slow/legit
+    local alpha=1 - math.clamp(Aimbot.Smoothness, 0.01, 0.99)
+    local blended=Camera.CFrame.LookVector:Lerp(lookDir, alpha)
     Camera.CFrame=CFrame.new(Camera.CFrame.Position,Camera.CFrame.Position+blended)
 end
 
@@ -280,6 +289,107 @@ local function disableNoclip()
     if Misc.NoclipConn then Misc.NoclipConn:Disconnect(); Misc.NoclipConn=nil end
     local char=LP.Character; if not char then return end
     for _,p in ipairs(char:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide=true end end
+end
+local function applyJumpPower(val)
+    Misc.JumpPower=val
+    local char=LP.Character; if not char then return end
+    local hum=char:FindFirstChildOfClass("Humanoid"); if not hum then return end
+    hum.JumpPower=val
+end
+local function applyWalkSpeed(val)
+    Misc.WalkSpeed=val
+    local char=LP.Character; if not char then return end
+    local hum=char:FindFirstChildOfClass("Humanoid"); if not hum then return end
+    hum.WalkSpeed=val
+end
+-- Reapply on respawn
+LP.CharacterAdded:Connect(function(char)
+    char:WaitForChild("Humanoid",5):ContinueWith(function() end)
+    task.wait(0.5)
+    local hum=char:FindFirstChildOfClass("Humanoid"); if not hum then return end
+    hum.JumpPower=Misc.JumpPower
+    hum.WalkSpeed=Misc.WalkSpeed
+end)
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- RAGE LOGIC
+-- ─────────────────────────────────────────────────────────────────────────────
+local function enableSpinbot()
+    if Rage.SpinConn then Rage.SpinConn:Disconnect() end
+    Rage.SpinConn = RunService.Heartbeat:Connect(function(dt)
+        local char = LP.Character; if not char then return end
+        local root = char:FindFirstChild("HumanoidRootPart"); if not root then return end
+        root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(Rage.SpinSpeed), 0)
+    end)
+end
+local function disableSpinbot()
+    if Rage.SpinConn then Rage.SpinConn:Disconnect(); Rage.SpinConn=nil end
+end
+
+local function applyHitboxExpand()
+    for _,p in ipairs(Players:GetPlayers()) do
+        if p == LP then continue end
+        local char = p.Character; if not char then continue end
+        local head = char:FindFirstChild("Head"); if not head then continue end
+        -- Remove existing hitbox if present
+        if Rage.HitboxParts[p] and Rage.HitboxParts[p].Parent then
+            Rage.HitboxParts[p]:Destroy()
+        end
+
+        local hb = Instance.new("Part")
+        hb.Name = "Head"
+        hb.Size = Vector3.new(Rage.HitboxSize, Rage.HitboxSize, Rage.HitboxSize)
+        hb.Transparency = 0.85
+        hb.CanCollide = false
+        hb.Massless = true
+        hb.Anchored = false
+        hb.CastShadow = false
+        hb.CFrame = head.CFrame
+        hb.Parent = char
+
+        local weld = Instance.new("Weld")
+        weld.Part0 = head
+        weld.Part1 = hb
+        weld.C0 = CFrame.new(0, 0, 0)
+        weld.C1 = CFrame.new(0, 0, 0)
+        weld.Parent = hb
+
+        Rage.HitboxParts[p] = hb
+    end
+end
+
+local function updateHitboxSizes()
+    for p, hb in pairs(Rage.HitboxParts) do
+        if hb and hb.Parent then
+            hb.Size = Vector3.new(Rage.HitboxSize, Rage.HitboxSize, Rage.HitboxSize)
+        end
+    end
+end
+
+local function removeHitboxes()
+    for p, hb in pairs(Rage.HitboxParts) do
+        if hb and hb.Parent then hb:Destroy() end
+    end
+    Rage.HitboxParts = {}
+end
+
+local function enableHitboxExpand()
+    applyHitboxExpand()
+    Players.PlayerAdded:Connect(function(p)
+        p.CharacterAdded:Connect(function()
+            task.wait(0.5)
+            if Rage.HitboxExpand then applyHitboxExpand() end
+        end)
+    end)
+    for _,p in ipairs(Players:GetPlayers()) do
+        p.CharacterAdded:Connect(function()
+            task.wait(0.5)
+            if Rage.HitboxExpand then applyHitboxExpand() end
+        end)
+    end
+end
+local function disableHitboxExpand()
+    removeHitboxes()
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -350,11 +460,11 @@ RunService.RenderStepped:Connect(function()
     if Aimbot.Enabled then pcall(doAimbotStep) end
     local doSkel=Enabled.Skeleton; local doTrac=Enabled.Tracer
     local doBox=Enabled.Box; local doName=Enabled.Name; local doHead=Enabled.Head
-    if not(doSkel or doTrac or doBox or doName or doHead) then return end
     local tOrigin=doTrac and tracerOriginPt() or nil
     for player,data in pairs(PlayerData) do
         pcall(function()
             local char=data.char; local parts=data.parts
+            if Enabled.TeamCheck and player.Team==LP.Team then hideAll(data); return end
             if not char or not char.Parent then
                 hideAll(data)
                 local nc=player.Character
@@ -461,8 +571,8 @@ local C = {
 
 -- ── Dimensions ────────────────────────────────────────────────────────────────
 local SIDEBAR_W = 120
-local CONTENT_W = 380       -- wide content pane
-local PW        = SIDEBAR_W + CONTENT_W  -- 500 total
+local CONTENT_W = 440       -- wider content pane for generous right padding
+local PW        = SIDEBAR_W + CONTENT_W  -- 560 total
 local HEADER_H  = 60
 local NAV_BTN_H = 72
 local NAV_GAP   = 8
@@ -500,13 +610,14 @@ local ESP_ROWS_CFG = {
     {"Box","Box"},{"Name Tag","Name"},{"Head Circle","Head"},
 }
 local COLOR_PICKER_H = 86
-local ESP_CANVAS  = PAD + #ESP_ROWS_CFG*ROW_H + GAP + 22 + COLOR_PICKER_H + PAD
-local AIM_CANVAS  = PAD + (SLIDER_H+GAP)*2 + (COMPACT_H+GAP)*4 + BTN_H + PAD
-local MISC_CANVAS = PAD + (COMPACT_H+GAP) + (ROW_H+GAP)*2 + GAP+1 + DANGER_H + PAD
+local ESP_CANVAS  = PAD + (#ESP_ROWS_CFG+1)*ROW_H + GAP + 22 + COLOR_PICKER_H + PAD  -- +1 for Team Check row
+local AIM_CANVAS  = PAD + (SLIDER_H+GAP)*2 + (COMPACT_H+GAP)*5 + BTN_H + PAD        -- +1 for Team Check row
+local MISC_CANVAS = PAD + (COMPACT_H+GAP) + (ROW_H+GAP)*2 + (SLIDER_H+GAP)*2 + GAP+1 + DANGER_H + PAD
+local RAGE_CANVAS = PAD + (ROW_H+GAP) + (SLIDER_H+GAP) + GAP + (ROW_H+GAP) + (SLIDER_H+GAP) + PAD
 
-local N_SECTIONS     = 3
+local N_SECTIONS     = 4
 local SIDEBAR_CONTENT_H = PAD + N_SECTIONS*(NAV_BTN_H+NAV_GAP) + PAD
-local CONTENT_H = math.max(ESP_CANVAS,AIM_CANVAS,MISC_CANVAS,SIDEBAR_CONTENT_H)
+local CONTENT_H = math.max(ESP_CANVAS,AIM_CANVAS,MISC_CANVAS,RAGE_CANVAS,SIDEBAR_CONTENT_H)
 local PH        = HEADER_H + CONTENT_H
 
 -- ═════════════════════════════════════════════════════════════════════════════
@@ -515,6 +626,7 @@ local PH        = HEADER_H + CONTENT_H
 local PassScreen=Instance.new("Frame",SG)
 PassScreen.Name="PassScreen"; PassScreen.Size=UDim2.new(1,0,1,0)
 PassScreen.BackgroundColor3=C.bg0; PassScreen.BorderSizePixel=0
+PassScreen.BackgroundTransparency=1
 PassScreen.ZIndex=200
 
 -- Card
@@ -568,6 +680,7 @@ pBtn.MouseLeave:Connect(function() tw(pBtn,TI_F,{BackgroundColor3=C.bg3}) end)
 local LoadScreen=Instance.new("Frame",SG)
 LoadScreen.Name="LoadScreen"; LoadScreen.Size=UDim2.new(1,0,1,0)
 LoadScreen.BackgroundColor3=C.bg0; LoadScreen.BorderSizePixel=0
+LoadScreen.BackgroundTransparency=1
 LoadScreen.ZIndex=199; LoadScreen.Visible=false
 
 local LC=Instance.new("Frame",LoadScreen)
@@ -610,9 +723,9 @@ local Root=Instance.new("Frame",SG)
 Root.Name="PhantomRoot"; Root.Size=UDim2.new(0,PW,0,PH)
 Root.Position=UDim2.new(0,28,0,28); Root.BackgroundColor3=C.bg1
 Root.BackgroundTransparency=0.28; Root.BorderSizePixel=0
-Root.Active=true; Root.Draggable=true; Root.ClipsDescendants=false
+Root.Active=true; Root.Draggable=false; Root.ClipsDescendants=false
 Root.Visible=false
-mkCorner(Root,14); mkStroke(Root,C.border,1)
+mkStroke(Root,C.border,1)
 
 -- ── Header ────────────────────────────────────────────────────────────────────
 local Header=Instance.new("Frame",Root)
@@ -626,12 +739,45 @@ LogoDot.BackgroundColor3=C.text; LogoDot.BorderSizePixel=0; mkCorner(LogoDot,99)
 local TitleLbl=mkLbl(Header,"PHANTOM",19,C.white,Enum.Font.GothamBold)
 TitleLbl.Size=UDim2.new(1,-40,0,24); TitleLbl.Position=UDim2.new(0,36,0,10)
 
-local SubLbl=mkLbl(Header,"executor suite  v11.0",11,C.textDim)
+local SubLbl=mkLbl(Header,"executor suite  v12.0",11,C.textDim)
 SubLbl.Size=UDim2.new(1,-40,0,14); SubLbl.Position=UDim2.new(0,36,1,-22)
 
 local HDiv=Instance.new("Frame",Header)
 HDiv.Size=UDim2.new(1,0,0,1); HDiv.Position=UDim2.new(0,0,1,-1)
 HDiv.BackgroundColor3=C.border; HDiv.BorderSizePixel=0
+
+-- ── Corner drag handles ───────────────────────────────────────────────────────
+do
+    local SZ = 40
+    local positions = {
+        UDim2.new(0,0,   0,0),
+        UDim2.new(1,-SZ, 0,0),
+        UDim2.new(0,0,   1,-SZ),
+        UDim2.new(1,-SZ, 1,-SZ),
+    }
+    local dragging, dragStart, startPos = false, nil, nil
+
+    UIS.InputChanged:Connect(function(i)
+        if dragging and i.UserInputType==Enum.UserInputType.MouseMovement then
+            local d=i.Position-dragStart
+            Root.Position=UDim2.new(startPos.X.Scale,startPos.X.Offset+d.X,startPos.Y.Scale,startPos.Y.Offset+d.Y)
+        end
+    end)
+    UIS.InputEnded:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.MouseButton1 then dragging=false end
+    end)
+
+    for _,pos in ipairs(positions) do
+        local h=Instance.new("TextButton",Root)
+        h.Size=UDim2.new(0,SZ,0,SZ); h.Position=pos
+        h.BackgroundTransparency=1; h.Text=""; h.BorderSizePixel=0; h.ZIndex=20
+        h.InputBegan:Connect(function(i)
+            if i.UserInputType==Enum.UserInputType.MouseButton1 then
+                dragging=true; dragStart=i.Position; startPos=Root.Position
+            end
+        end)
+    end
+end
 
 -- ── Sidebar ───────────────────────────────────────────────────────────────────
 local Sidebar=Instance.new("Frame",Root)
@@ -856,22 +1002,51 @@ end
 -- ═════════════════════════════════════════════════════════════════════════════
 -- SECTION FRAMES
 -- ═════════════════════════════════════════════════════════════════════════════
-local SECTIONS={{id="ESP",label="ESP",icon="◈"},{id="AIMBOT",label="AIMBOT",icon="⊕"},{id="MISC",label="MISC",icon="⚙"}}
+local SECTIONS={{id="ESP",label="ESP",icon="◈"},{id="AIMBOT",label="AIMBOT",icon="⊕"},{id="MISC",label="MISC",icon="⚙"},{id="RAGE",label="RAGE",icon="⚡"}}
 local contentFrames={}
 for _,sec in ipairs(SECTIONS) do
     local f=Instance.new("ScrollingFrame",ContentPane)
     f.Name=sec.id; f.Size=UDim2.new(1,0,1,0); f.BackgroundTransparency=1
-    f.ScrollBarThickness=0; f.Visible=false; contentFrames[sec.id]=f
+    f.ScrollBarThickness=3
+    f.ScrollBarImageColor3=Color3.fromRGB(90,90,90)
+    f.ScrollingDirection=Enum.ScrollingDirection.Y
+    f.ElasticBehavior=Enum.ElasticBehavior.Never
+    f.Visible=false; contentFrames[sec.id]=f
+
+    -- Mouse wheel smooth scroll
+    local scrollTween=nil
+    f.MouseWheelForward:Connect(function()
+        if scrollTween then scrollTween:Cancel() end
+        local target=math.max(0, f.CanvasPosition.Y - 80)
+        scrollTween=TweenService:Create(f, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {CanvasPosition=Vector2.new(0,target)})
+        scrollTween:Play()
+    end)
+    f.MouseWheelBackward:Connect(function()
+        if scrollTween then scrollTween:Cancel() end
+        local maxScroll=f.AbsoluteCanvasSize.Y - f.AbsoluteSize.Y
+        local target=math.min(maxScroll, f.CanvasPosition.Y + 80)
+        scrollTween=TweenService:Create(f, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {CanvasPosition=Vector2.new(0,target)})
+        scrollTween:Play()
+    end)
 end
 contentFrames["ESP"].Visible=true
 contentFrames["ESP"].CanvasSize=UDim2.new(0,0,0,ESP_CANVAS)
 contentFrames["AIMBOT"].CanvasSize=UDim2.new(0,0,0,AIM_CANVAS)
 contentFrames["MISC"].CanvasSize=UDim2.new(0,0,0,MISC_CANVAS)
+contentFrames["RAGE"].CanvasSize=UDim2.new(0,0,0,RAGE_CANVAS)
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- SIDEBAR NAV
 -- ═════════════════════════════════════════════════════════════════════════════
 local activeSection="ESP"; local sideNavBtns={}
+
+-- Fade-in animation helper for content frames
+local function animateIn(frame)
+    frame.CanvasPosition=Vector2.new(0,0)
+    frame.Position=UDim2.new(0,0,0,0)
+    frame.Visible=true
+end
+
 for i,sec in ipairs(SECTIONS) do
     local yPos=PAD+(i-1)*(NAV_BTN_H+NAV_GAP)
     local navBtn=Instance.new("TextButton",Sidebar)
@@ -887,15 +1062,26 @@ for i,sec in ipairs(SECTIONS) do
 
     sideNavBtns[sec.id]={btn=navBtn,icon=iconLbl,text=textLbl,yPos=yPos}
 
+    -- Press scale animation
+    navBtn.MouseButton1Down:Connect(function()
+        tw(navBtn, TweenInfo.new(0.08, Enum.EasingStyle.Quad), {Size=UDim2.new(1,-14,0,NAV_BTN_H-4), Position=UDim2.new(0,7,0,yPos+2)})
+    end)
+    navBtn.MouseButton1Up:Connect(function()
+        tw(navBtn, TweenInfo.new(0.12, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size=UDim2.new(1,-10,0,NAV_BTN_H), Position=UDim2.new(0,5,0,yPos)})
+    end)
+    navBtn.MouseLeave:Connect(function()
+        tw(navBtn, TweenInfo.new(0.10, Enum.EasingStyle.Quad), {Size=UDim2.new(1,-10,0,NAV_BTN_H), Position=UDim2.new(0,5,0,yPos)})
+    end)
+
     navBtn.MouseButton1Click:Connect(function()
         if activeSection==sec.id then return end
         local old=sideNavBtns[activeSection]
-        tw(old.btn,TI_F,{BackgroundColor3=C.bg2}); old.icon.TextColor3=C.textDim; old.text.TextColor3=C.textDim
         contentFrames[activeSection].Visible=false
+        tw(old.btn,TI_F,{BackgroundColor3=C.bg2}); old.icon.TextColor3=C.textDim; old.text.TextColor3=C.textDim
         activeSection=sec.id
         tw(navBtn,TI_F,{BackgroundColor3=C.bg4}); iconLbl.TextColor3=C.white; textLbl.TextColor3=C.text
-        contentFrames[sec.id].Visible=true
         tw(SideIndicator,TI_M,{Position=UDim2.new(1,-3,0,yPos+20)})
+        animateIn(contentFrames[sec.id])
     end)
 end
 
@@ -911,6 +1097,13 @@ do
             function() toggleFeature(cfg[2],false) end)
         y=y+ROW_H
     end
+
+    -- Team Check
+    makeSep(f,y-1)
+    makePill(f,y,"Team Check",
+        function() toggleFeature("TeamCheck",true)  end,
+        function() toggleFeature("TeamCheck",false) end)
+    y=y+ROW_H
 
     -- Color picker
     makeSep(f,y+6)
@@ -976,6 +1169,10 @@ do
     end)
     y=y+COMPACT_H+GAP
 
+    makePillCard(f,y,"Team Check",
+        function() Aimbot.TeamCheck=true end, function() Aimbot.TeamCheck=false end)
+    y=y+COMPACT_H+GAP
+
     local aimOn=false
     makeBigBtn(f,y,"AIMBOT  ·  OFF",function(btn)
         aimOn=not aimOn; Aimbot.Enabled=aimOn
@@ -1004,6 +1201,18 @@ do
         function() Misc.Noclip=false; disableNoclip() end)
     y=y+ROW_H+GAP
 
+    makeSep(f,y); y=y+GAP
+
+    makeSlider(f,y,"Jump Modifier",10,300,Misc.JumpPower,
+        function(v) return string.format("%.0f",v) end,
+        function(v) applyJumpPower(v) end)
+    y=y+SLIDER_H+GAP
+
+    makeSlider(f,y,"Speed Modifier",2,150,Misc.WalkSpeed,
+        function(v) return string.format("%.0f",v) end,
+        function(v) applyWalkSpeed(v) end)
+    y=y+SLIDER_H+GAP
+
     local dangerSep=Instance.new("Frame",f)
     dangerSep.Size=UDim2.new(1,-PAD*2,0,1); dangerSep.Position=UDim2.new(0,PAD,0,y)
     dangerSep.BackgroundColor3=Color3.fromRGB(90,25,25); dangerSep.BorderSizePixel=0
@@ -1014,20 +1223,75 @@ do
         if destroyed then return end; destroyed=true
         for _,data in pairs(PlayerData) do destroyData(data) end
         for _,l in ipairs(fovCircle) do l:Remove() end
-        disableInfiniteJump(); disableNoclip()
+        disableInfiniteJump(); disableNoclip(); disableSpinbot(); disableHitboxExpand()
         SG:Destroy()
         print("[PHANTOM] GUI destroyed permanently.")
     end)
 end
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- MENU TOGGLE KEY
+-- BUILD  RAGE  SECTION
+-- ═════════════════════════════════════════════════════════════════════════════
+do
+    local f=contentFrames["RAGE"]; local y=PAD
+
+    -- Spinbot toggle
+    makePill(f,y,"Spinbot",
+        function() Rage.Spinbot=true;  enableSpinbot()  end,
+        function() Rage.Spinbot=false; disableSpinbot() end)
+    y=y+ROW_H+GAP
+
+    -- Spin speed slider
+    makeSlider(f,y,"Spin Speed",1,60,Rage.SpinSpeed,
+        function(v) return string.format("%.0f °/frame",v) end,
+        function(v) Rage.SpinSpeed=v end)
+    y=y+SLIDER_H+GAP+6
+
+    -- Big Heads toggle
+    makeSep(f,y); y=y+GAP
+    makePill(f,y,"Expand Head Hitbox",
+        function() Rage.HitboxExpand=true;  enableHitboxExpand()  end,
+        function() Rage.HitboxExpand=false; disableHitboxExpand() end)
+    y=y+ROW_H+GAP
+
+    -- Head size slider
+    makeSlider(f,y,"Hitbox Size",1,15,Rage.HitboxSize,
+        function(v) return string.format("%.1fx",v) end,
+        function(v)
+            Rage.HitboxSize=v
+            if Rage.HitboxExpand then
+                updateHitboxSizes()
+            end
+        end)
+    y=y+SLIDER_H+GAP
+end
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- MENU TOGGLE KEY  (animate show/hide)
 -- ═════════════════════════════════════════════════════════════════════════════
 local menuVisible=true
+local savedRootPos=UDim2.new(0,28,0,28)
 UIS.InputBegan:Connect(function(input,gpe)
     if gpe then return end
     if input.UserInputType~=Enum.UserInputType.Keyboard then return end
-    if input.KeyCode==Misc.MenuKey then menuVisible=not menuVisible; Root.Visible=menuVisible end
+    if input.KeyCode==Misc.MenuKey then
+        menuVisible=not menuVisible
+        if menuVisible then
+            Root.Visible=true
+            Root.BackgroundTransparency=1
+            Root.Size=UDim2.new(0,PW*0.92,0,PH*0.92)
+            tw(Root,TweenInfo.new(0.22,Enum.EasingStyle.Back,Enum.EasingDirection.Out),{
+                BackgroundTransparency=0.28,
+                Size=UDim2.new(0,PW,0,PH)
+            })
+        else
+            tw(Root,TweenInfo.new(0.18,Enum.EasingStyle.Quad,Enum.EasingDirection.In),{
+                BackgroundTransparency=1,
+                Size=UDim2.new(0,PW*0.94,0,PH*0.94)
+            })
+            task.delay(0.18, function() Root.Visible=false; Root.Size=UDim2.new(0,PW,0,PH) end)
+        end
+    end
 end)
 
 -- ═════════════════════════════════════════════════════════════════════════════
@@ -1053,10 +1317,17 @@ local function runLoadingAndOpen()
     task.wait(0.45)
     LoadScreen.Visible=false
 
-    -- Fade in main UI
-    Root.Visible=true; Root.BackgroundTransparency=1
-    tw(Root,TweenInfo.new(0.35,Enum.EasingStyle.Quad),{BackgroundTransparency=0.28})
-    print("[PHANTOM] v11.0 ready — Menu key: "..keyName(Misc.MenuKey))
+    -- Scale + fade in main UI
+    Root.Visible=true
+    Root.BackgroundTransparency=1
+    Root.Size=UDim2.new(0,PW*0.92,0,PH*0.92)
+    Root.Position=UDim2.new(0,28+PW*0.04,0,28+PH*0.04)
+    tw(Root,TweenInfo.new(0.38,Enum.EasingStyle.Back,Enum.EasingDirection.Out),{
+        BackgroundTransparency=0.28,
+        Size=UDim2.new(0,PW,0,PH),
+        Position=UDim2.new(0,28,0,28)
+    })
+    print("[PHANTOM] v12.0 ready — Menu key: "..keyName(Misc.MenuKey))
 end
 
 -- ═════════════════════════════════════════════════════════════════════════════
